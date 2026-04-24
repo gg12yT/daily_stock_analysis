@@ -115,7 +115,9 @@ jobs:
           
           print(f'成功获取 {len(results)} 只基金数据')
           with open(os.getenv('GITHUB_OUTPUT'), 'a') as f:
-              f.write(f"results={json.dumps(results, ensure_ascii=False)}\n")
+              f.write(f"results<<PYEOF_CONTENT\n")
+              f.write(json.dumps(results, ensure_ascii=False) + "\n")
+              f.write("PYEOF_CONTENT\n")
               f.write(f"count={len(results)}\n")
           PYEOF
       
@@ -123,6 +125,7 @@ jobs:
         if: success()
         env:
           FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+          results: ${{ steps.analysis.outputs.results }}
         run: |
           python << 'PYEOF'
           import os, json, urllib.request
@@ -156,12 +159,17 @@ jobs:
               manager = r.get('manager', 'N/A')
               max_dd = r.get('max_drawdown', 'N/A')
               
-              if daily and float(daily) > 0:
+              try:
+                  daily_val = float(daily) if daily not in (None, 'N/A', '') else 0
+              except:
+                  daily_val = 0
+
+              if daily_val > 0:
                   daily_emoji, daily_str = '🔴', f"+{daily}%"
-              elif daily and float(daily) < 0:
+              elif daily_val < 0:
                   daily_emoji, daily_str = '🟢', f"{daily}%"
               else:
-                  daily_emoji, daily_str = '⚪', f"{daily}%" if daily else "N/A"
+                  daily_emoji, daily_str = '⚪', "0.00%"
               
               signal_emoji = {'BUY': '🟢买入', 'HOLD': '🟡持有', 'WATCH': '⚪观望', 'SELL': '🔴卖出'}.get(signal, '⚪观望')
               
