@@ -19,23 +19,21 @@ jobs:
         with:
           python-version: '3.10'
       
-      - name: 安装依赖
-        run: |
-          pip install akshare pandas numpy requests
-      
-      - name: 获取基金完整数据并分析
-        id: analysis
+      - name: 安装依赖并执行分析
         env:
           FUND_LIST: ${{ secrets.FUND_LIST }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
         run: |
+          pip install akshare pandas numpy requests
           python << 'PYEOF'
-          import os, json, akshare as ak, pandas as pd
+          import os, json, urllib.request, akshare as ak, pandas as pd
           from datetime import datetime
           
           fund_list = os.getenv('FUND_LIST', '').split(',')
+          webhook = os.getenv('FEISHU_WEBHOOK_URL', '')
           print(f'开始分析 {len(fund_list)} 只基金...')
-          results = []
           
+          results = []
           for fund_code in fund_list:
               fund_code = fund_code.strip()
               if not fund_code:
@@ -114,31 +112,8 @@ jobs:
                   results.append({'code': fund_code, 'name': fund_code, 'error': str(e), 'prediction': '❌ 获取失败', 'signal': 'ERROR'})
           
           print(f'成功获取 {len(results)} 只基金数据')
-          with open(os.getenv('GITHUB_OUTPUT'), 'a') as f:
-              f.write(f"results<<PYEOF_CONTENT\n")
-              f.write(json.dumps(results, ensure_ascii=False) + "\n")
-              f.write("PYEOF_CONTENT\n")
-              f.write(f"count={len(results)}\n")
-          PYEOF
-      
-      - name: 发送详细飞书通知
-        if: success()
-        env:
-          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
-          results: ${{ steps.analysis.outputs.results }}
-        run: |
-          python << 'PYEOF'
-          import os, json, urllib.request
-          from datetime import datetime
           
-          webhook = os.getenv('FEISHU_WEBHOOK_URL', '')
-          if not webhook:
-              print('未配置飞书Webhook')
-              exit(0)
-          
-          results = json.loads(os.getenv('results', '[]'))
           now = datetime.now().strftime('%Y-%m-%d %H:%M')
-          
           buy_count = sum(1 for r in results if r.get('signal') == 'BUY')
           hold_count = sum(1 for r in results if r.get('signal') == 'HOLD')
           watch_count = sum(1 for r in results if r.get('signal') == 'WATCH')
@@ -159,17 +134,12 @@ jobs:
               manager = r.get('manager', 'N/A')
               max_dd = r.get('max_drawdown', 'N/A')
               
-              try:
-                  daily_val = float(daily) if daily not in (None, 'N/A', '') else 0
-              except:
-                  daily_val = 0
-
-              if daily_val > 0:
+              if daily and float(daily) > 0:
                   daily_emoji, daily_str = '🔴', f"+{daily}%"
-              elif daily_val < 0:
+              elif daily and float(daily) < 0:
                   daily_emoji, daily_str = '🟢', f"{daily}%"
               else:
-                  daily_emoji, daily_str = '⚪', "0.00%"
+                  daily_emoji, daily_str = '⚪', f"{daily}%" if daily else "N/A"
               
               signal_emoji = {'BUY': '🟢买入', 'HOLD': '🟡持有', 'WATCH': '⚪观望', 'SELL': '🔴卖出'}.get(signal, '⚪观望')
               
@@ -190,11 +160,15 @@ jobs:
           msg_text += f"└ 🔴 卖出: {sell_count} 只\n\n"
           msg_text += f"━━━━━━━━━━━━━━━━━━\n⚠️ 仅供参考，不构成投资建议\n"
           
-          msg = {'msg_type': 'text', 'content': {'text': msg_text}}
-          req = urllib.request.Request(webhook, data=json.dumps(msg).encode('utf-8'), headers={'Content-Type': 'application/json'})
-          try:
-              with urllib.request.urlopen(req, timeout=10) as response:
-                  print('飞书通知发送成功')
-          except Exception as e:
-              print(f'飞书通知发送失败: {e}')
+          if webhook:
+              msg = {'msg_type': 'text', 'content': {'text': msg_text}}
+              req = urllib.request.Request(webhook, data=json.dumps(msg).encode('utf-8'), headers={'Content-Type': 'application/json'})
+              try:
+                  with urllib.request.urlopen(req, timeout=10) as response:
+                      print('飞书通知发送成功')
+              except Exception as e:
+                  print(f'飞书通知发送失败: {e}')
+          else:
+              print('未配置飞书Webhook')
+          
           PYEOF
