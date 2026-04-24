@@ -47,14 +47,9 @@ jobs:
                       row = df_daily.iloc[0]
                       fund_data['name'] = row.get('基金简称', fund_code)
                       fund_data['nav'] = row.get('单位净值', 'N/A')
-                      fund_data['acc_nav'] = row.get('累计净值', 'N/A')
                       fund_data['daily_change'] = row.get('日增长率', 0)
                       fund_data['weekly_change'] = row.get('近1月增长率', 0)
                       fund_data['monthly_change'] = row.get('近3月增长率', 0)
-                      fund_data['quarterly_change'] = row.get('近6月增长率', 0)
-                      fund_data['yearly_change'] = row.get('近1年增长率', 0)
-                      fund_data['purchase_status'] = row.get('申购状态', 'N/A')
-                      fund_data['redeem_status'] = row.get('赎回状态', 'N/A')
                   
                   try:
                       df_history = ak.fund_open_fund_info_em(fund=fund_code, indicator="单位净值走势")
@@ -79,16 +74,10 @@ jobs:
                       if df_info is not None and not df_info.empty:
                           info = df_info.to_dict('records')[0] if hasattr(df_info, 'to_dict') else {}
                           fund_data['manager'] = info.get('基金经理', 'N/A')
-                          fund_data['found_date'] = info.get('成立日期', 'N/A')
-                          fund_data['scale'] = info.get('规模', 'N/A')
                       else:
                           fund_data['manager'] = 'N/A'
-                          fund_data['found_date'] = 'N/A'
-                          fund_data['scale'] = 'N/A'
                   except:
                       fund_data['manager'] = 'N/A'
-                      fund_data['found_date'] = 'N/A'
-                      fund_data['scale'] = 'N/A'
                   
                   weekly = float(fund_data.get('weekly_change', 0) or 0)
                   monthly = float(fund_data.get('monthly_change', 0) or 0)
