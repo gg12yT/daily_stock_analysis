@@ -1,0 +1,65 @@
+name: 基金智能分析
+
+on:
+  schedule:
+    # 每周一到周五 18:00 (北京时间) 自动运行
+    - cron: '0 10 * * 1-5'
+  workflow_dispatch:
+    # 支持手动触发
+
+jobs:
+  fund-analysis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - name: Checkout代码
+        uses: actions/checkout@v4
+      
+      - name: 设置Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      
+      - name: 安装依赖
+        run: |
+          pip install akshare pandas numpy
+      
+      - name: 获取基金数据
+        env:
+          FUND_LIST: ${{ secrets.FUND_LIST }}
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          python -c "
+          import os
+          import akshare as ak
+          fund_list = os.getenv('FUND_LIST', '').split(',')
+          for fund_code in fund_list:
+              fund_code = fund_code.strip()
+              if not fund_code:
+                  continue
+              try:
+                  df = ak.fund_open_fund_daily_em(symbol=fund_code)
+                  if not df.empty:
+                      name = df.iloc[0].get('基金简称', fund_code)
+                      nav = df.iloc[0].get('单位净值', 'N/A')
+                      change = df.iloc[0].get('日增长率', 0)
+                      print(f'{name}: {nav} ({change}%)')
+              except Exception as e:
+                  print(f'{fund_code}: 错误 - {e}')
+          "
+      
+      - name: 发送飞书通知
+        if: success()
+        env:
+          FEISHU_WEBHOOK_URL: ${{ secrets.FEISHU_WEBHOOK_URL }}
+        run: |
+          python -c "
+          import os, json, urllib.request
+          from datetime import datetime
+          webhook = os.getenv('FEISHU_WEBHOOK_URL', '')
+          if webhook:
+              msg = {'msg_type': 'text', 'content': {'text': f'基金分析完成 {datetime.now().strftime(\"%Y-%m-%d %H:%M\")}'}}
+              req = urllib.request.Request(webhook, data=json.dumps(msg).encode('utf-8'), headers={'Content-Type': 'application/json'})
+              urllib.request.urlopen(req)
+          "
