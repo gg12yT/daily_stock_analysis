@@ -31,25 +31,43 @@ jobs:
           
           fund_list = os.getenv('FUND_LIST', '').split(',')
           webhook = os.getenv('FEISHU_WEBHOOK_URL', '')
-          print(f'开始分析 {len(fund_list)} 只基金...')
+          fund_list = [f.strip().replace('，', '').replace(' ', '') for f in fund_list if f.strip()]
+          print(f'开始分析 {len(fund_list)} 只基金: {fund_list}')
           
           results = []
+          
+          try:
+              all_funds = ak.fund_open_fund_daily_em()
+              print(f'获取到 {len(all_funds)} 只基金数据')
+          except Exception as e:
+              print(f'获取全部基金数据失败: {e}')
+              all_funds = pd.DataFrame()
+          
           for fund_code in fund_list:
-              fund_code = fund_code.strip()
-              if not fund_code:
-                  continue
               try:
                   print(f'分析基金: {fund_code}')
-                  fund_data = {'code': fund_code, 'error': None}
+                  fund_data = {'code': fund_code}
+                  found = False
                   
-                  df_daily = ak.fund_open_fund_daily_em(symbol=fund_code)
-                  if not df_daily.empty:
-                      row = df_daily.iloc[0]
-                      fund_data['name'] = row.get('基金简称', fund_code)
-                      fund_data['nav'] = row.get('单位净值', 'N/A')
-                      fund_data['daily_change'] = row.get('日增长率', 0)
-                      fund_data['weekly_change'] = row.get('近1月增长率', 0)
-                      fund_data['monthly_change'] = row.get('近3月增长率', 0)
+                  if not all_funds.empty and '基金代码' in all_funds.columns:
+                      fund_row = all_funds[all_funds['基金代码'] == fund_code]
+                      if not fund_row.empty:
+                          row = fund_row.iloc[0]
+                          fund_data['name'] = row.get('基金简称', fund_code)
+                          fund_data['nav'] = row.get('单位净值', 'N/A')
+                          fund_data['daily_change'] = row.get('日增长率', 0)
+                          fund_data['weekly_change'] = row.get('近1月增长率', 0)
+                          fund_data['monthly_change'] = row.get('近3月增长率', 0)
+                          found = True
+                          print(f'找到: {fund_data["name"]}, 净值: {fund_data["nav"]}')
+                  
+                  if not found:
+                      fund_data['name'] = fund_code
+                      fund_data['nav'] = 'N/A'
+                      fund_data['daily_change'] = 0
+                      fund_data['weekly_change'] = 0
+                      fund_data['monthly_change'] = 0
+                      print(f'未找到基金: {fund_code}')
                   
                   try:
                       df_history = ak.fund_open_fund_info_em(fund=fund_code, indicator="单位净值走势")
@@ -58,14 +76,20 @@ jobs:
                           latest = df_history.iloc[-1]
                           ma20 = df_history['MA20'].iloc[-1]
                           current_nav = latest['单位净值']
-                          fund_data['trend'] = '上升趋势' if current_nav > ma20 else ('下降趋势' if current_nav < ma20 * 0.95 else '震荡整理')
+                          if current_nav > ma20:
+                              fund_data['trend'] = '上升趋势'
+                          elif current_nav < ma20 * 0.95:
+                              fund_data['trend'] = '下降趋势'
+                          else:
+                              fund_data['trend'] = '震荡整理'
                           peak = df_history['单位净值'].cummax()
                           drawdown = (df_history['单位净值'] - peak) / peak * 100
                           fund_data['max_drawdown'] = round(drawdown.min(), 2)
                       else:
                           fund_data['trend'] = '数据不足'
                           fund_data['max_drawdown'] = 'N/A'
-                  except:
+                  except Exception as e:
+                      print(f'获取历史数据失败: {e}')
                       fund_data['trend'] = '数据不足'
                       fund_data['max_drawdown'] = 'N/A'
                   
@@ -76,87 +100,69 @@ jobs:
                           fund_data['manager'] = info.get('基金经理', 'N/A')
                       else:
                           fund_data['manager'] = 'N/A'
-                  except:
+                  except Exception as e:
+                      print(f'获取经理信息失败: {e}')
                       fund_data['manager'] = 'N/A'
                   
                   weekly = float(fund_data.get('weekly_change', 0) or 0)
                   monthly = float(fund_data.get('monthly_change', 0) or 0)
                   if weekly > 3 and monthly > 5:
-                      fund_data['prediction'] = '🌟 强势推荐'
+                      fund_data['prediction'] = '强势推荐'
                       fund_data['signal'] = 'BUY'
                   elif weekly > 0 and monthly > 0:
-                      fund_data['prediction'] = '✅ 温和上涨'
+                      fund_data['prediction'] = '温和上涨'
                       fund_data['signal'] = 'HOLD'
                   elif weekly < -3 or monthly < -10:
-                      fund_data['prediction'] = '⚠️ 注意风险'
+                      fund_data['prediction'] = '注意风险'
                       fund_data['signal'] = 'SELL'
                   else:
-                      fund_data['prediction'] = '➡️ 观望'
+                      fund_data['prediction'] = '观望'
                       fund_data['signal'] = 'WATCH'
                   
                   results.append(fund_data)
                   print(f'{fund_data["name"]}: {fund_data["prediction"]}')
               except Exception as e:
                   print(f'获取 {fund_code} 失败: {e}')
-                  results.append({'code': fund_code, 'name': fund_code, 'error': str(e), 'prediction': '❌ 获取失败', 'signal': 'ERROR'})
+                  results.append({'code': fund_code, 'name': fund_code, 'prediction': '失败', 'signal': 'ERROR'})
           
           print(f'成功获取 {len(results)} 只基金数据')
           
           now = datetime.now().strftime('%Y-%m-%d %H:%M')
-          buy_count = sum(1 for r in results if r.get('signal') == 'BUY')
-          hold_count = sum(1 for r in results if r.get('signal') == 'HOLD')
-          watch_count = sum(1 for r in results if r.get('signal') == 'WATCH')
-          sell_count = sum(1 for r in results if r.get('signal') == 'SELL')
+          buy = sum(1 for r in results if r.get('signal') == 'BUY')
+          hold = sum(1 for r in results if r.get('signal') == 'HOLD')
+          watch = sum(1 for r in results if r.get('signal') == 'WATCH')
+          sell = sum(1 for r in results if r.get('signal') == 'SELL')
           
-          msg_text = f"📊 **基金每日分析报告**\n🕐 {now}\n━━━━━━━━━━━━━━━━━━\n\n"
+          msg = f"📊 **基金每日分析报告**\n🕐 {now}\n━━━━━━━━━━━━━━━━━━\n\n"
           
           for r in results:
-              name = r.get('name', r.get('code', 'N/A'))
-              code = r.get('code', '')
-              nav = r.get('nav', 'N/A')
-              daily = r.get('daily_change', 0)
-              weekly = r.get('weekly_change', 0)
-              monthly = r.get('monthly_change', 0)
-              trend = r.get('trend', 'N/A')
-              prediction = r.get('prediction', '➡️ 观望')
-              signal = r.get('signal', 'WATCH')
-              manager = r.get('manager', 'N/A')
-              max_dd = r.get('max_drawdown', 'N/A')
+              n = r.get('name', r.get('code', 'N/A'))
+              c = r.get('code', '')
+              v = r.get('nav', 'N/A')
+              d = r.get('daily_change', 0)
+              w = r.get('weekly_change', 0)
+              m = r.get('monthly_change', 0)
+              t = r.get('trend', 'N/A')
+              p = r.get('prediction', '观望')
+              s = r.get('signal', 'WATCH')
+              mg = r.get('manager', 'N/A')
+              md = r.get('max_drawdown', 'N/A')
               
-              if daily and float(daily) > 0:
-                  daily_emoji, daily_str = '🔴', f"+{daily}%"
-              elif daily and float(daily) < 0:
-                  daily_emoji, daily_str = '🟢', f"{daily}%"
-              else:
-                  daily_emoji, daily_str = '⚪', f"{daily}%" if daily else "N/A"
+              emoji = '🔴' if (d and float(d) > 0) else ('🟢' if (d and float(d) < 0) else '⚪')
+              ds = f"+{d}%" if (d and float(d) > 0) else f"{d}%" if d else 'N/A'
+              se = {'BUY': '🟢买入', 'HOLD': '🟡持有', 'WATCH': '⚪观望', 'SELL': '🔴卖出', 'ERROR': '❌错误'}.get(s, '⚪观望')
               
-              signal_emoji = {'BUY': '🟢买入', 'HOLD': '🟡持有', 'WATCH': '⚪观望', 'SELL': '🔴卖出'}.get(signal, '⚪观望')
-              
-              msg_text += f"**{name}** ({code})\n"
-              msg_text += f"├ 净值: {nav} {daily_emoji}{daily_str}\n"
-              msg_text += f"├ 近1周: {weekly}%\n"
-              msg_text += f"├ 近3月: {monthly}%\n"
-              msg_text += f"├ 趋势: {trend}\n"
-              msg_text += f"├ 最大回撤: {max_dd}%\n"
-              msg_text += f"├ 经理: {manager}\n"
-              msg_text += f"└ 信号: {signal_emoji} {prediction}\n"
-              msg_text += f"━━━━━━━━━━━━━━━━━━\n\n"
+              msg += f"**{n}** ({c})\n├ 净值: {v} {emoji}{ds}\n├ 近1周: {w}%\n├ 近3月: {m}%\n├ 趋势: {t}\n├ 最大回撤: {md}%\n├ 经理: {mg}\n└ 信号: {se} {p}\n━━━━━━━━━━━━━━━━━━\n\n"
           
-          msg_text += f"📈 **汇总**\n"
-          msg_text += f"├ 🟢 买入: {buy_count} 只\n"
-          msg_text += f"├ 🟡 持有: {hold_count} 只\n"
-          msg_text += f"├ ⚪ 观望: {watch_count} 只\n"
-          msg_text += f"└ 🔴 卖出: {sell_count} 只\n\n"
-          msg_text += f"━━━━━━━━━━━━━━━━━━\n⚠️ 仅供参考，不构成投资建议\n"
+          msg += f"📈 **汇总**\n├ 🟢 买入: {buy} 只\n├ 🟡 持有: {hold} 只\n├ ⚪ 观望: {watch} 只\n└ 🔴 卖出: {sell} 只\n\n━━━━━━━━━━━━━━━━━━\n⚠️ 仅供参考，不构成投资建议\n"
           
           if webhook:
-              msg = {'msg_type': 'text', 'content': {'text': msg_text}}
-              req = urllib.request.Request(webhook, data=json.dumps(msg).encode('utf-8'), headers={'Content-Type': 'application/json'})
               try:
-                  with urllib.request.urlopen(req, timeout=10) as response:
-                      print('飞书通知发送成功')
+                  req = urllib.request.Request(webhook, data=json.dumps({'msg_type': 'text', 'content': {'text': msg}}).encode('utf-8'), headers={'Content-Type': 'application/json'})
+                  urllib.request.urlopen(req, timeout=10)
+                  print('飞书通知发送成功')
               except Exception as e:
-                  print(f'飞书通知发送失败: {e}')
+                  print(f'发送失败: {e}')
           else:
               print('未配置飞书Webhook')
           
